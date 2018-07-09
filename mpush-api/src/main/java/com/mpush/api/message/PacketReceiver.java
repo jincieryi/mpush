@@ -17,23 +17,16 @@
  *   ohun@live.cn (夜色)
  */
 
-package com.mpush.common.security;
+package com.mpush.api.message;
 
-import com.mpush.api.connection.Cipher;
-import com.mpush.api.spi.Spi;
-import com.mpush.api.spi.core.CipherFactory;
+import com.mpush.api.connection.Connection;
+import com.mpush.api.protocol.Packet;
 
 /**
- * Created by yxx on 2016/5/19.
+ * Created by ohun on 2015/12/22.
  *
  * @author ohun@live.cn
  */
-@Spi
-public class RsaCipherFactory implements CipherFactory {
-    private static final RsaCipher RSA_CIPHER = RsaCipher.create();
-
-    @Override
-    public Cipher get() {
-        return RSA_CIPHER;
-    }
+public interface PacketReceiver {
+    void onReceive(Packet packet, Connection connection);
 }

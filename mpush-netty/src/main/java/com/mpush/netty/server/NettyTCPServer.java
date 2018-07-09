@@ -25,23 +25,25 @@ import com.mpush.api.service.Server;
 import com.mpush.api.service.ServiceException;
 import com.mpush.netty.codec.PacketDecoder;
 import com.mpush.netty.codec.PacketEncoder;
-import com.mpush.tools.config.CC;
+import com.mpush.tools.common.Strings;
 import com.mpush.tools.thread.ThreadNames;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.*;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollServerSocketChannel;
-import io.netty.channel.epoll.Native;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.InetSocketAddress;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static com.mpush.tools.Utils.useNettyEpoll;
 
 /**
  * Created by ohun on 2015/12/22.
@@ -57,11 +59,18 @@ public abstract class NettyTCPServer extends BaseService implements Server {
     protected final AtomicReference<State> serverState = new AtomicReference<>(State.Created);
 
     protected final int port;
+    protected final String host;
     protected EventLoopGroup bossGroup;
     protected EventLoopGroup workerGroup;
 
     public NettyTCPServer(int port) {
         this.port = port;
+        this.host = null;
+    }
+
+    public NettyTCPServer(int port, String host) {
+        this.port = port;
+        this.host = host;
     }
 
     public void init() {
@@ -157,7 +166,8 @@ public abstract class NettyTCPServer extends BaseService implements Server {
             /***
              * 绑定端口并启动去接收进来的连接
              */
-            b.bind(port).addListener(future -> {
+            InetSocketAddress address = Strings.isBlank(host) ? new InetSocketAddress(port) : new InetSocketAddress(host, port);
+            b.bind(address).addListener(future -> {
                 if (future.isSuccess()) {
                     serverState.set(State.Started);
                     logger.info("server start success on:{}", port);
@@ -290,18 +300,6 @@ public abstract class NettyTCPServer extends BaseService implements Server {
 
     protected int getIoRate() {
         return 70;
-    }
-
-    protected boolean useNettyEpoll() {
-        if (CC.mp.core.useNettyEpoll()) {
-            try {
-                Native.offsetofEpollData();
-                return true;
-            } catch (UnsatisfiedLinkError error) {
-                logger.warn("can not load netty epoll, switch nio model.");
-            }
-        }
-        return false;
     }
 
     public EventLoopGroup getBossGroup() {

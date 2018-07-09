@@ -22,10 +22,9 @@ package com.mpush.client.push;
 import com.mpush.api.Constants;
 import com.mpush.api.push.*;
 import com.mpush.api.router.ClientLocation;
-import com.mpush.client.gateway.connection.GatewayConnectionFactory;
+import com.mpush.client.MPushClient;
 import com.mpush.common.message.gateway.GatewayPushMessage;
 import com.mpush.common.push.GatewayPushResult;
-import com.mpush.common.router.CachedRemoteRouterManager;
 import com.mpush.common.router.RemoteRouter;
 import com.mpush.tools.Jsons;
 import com.mpush.tools.common.TimeLine;
@@ -35,7 +34,6 @@ import org.slf4j.LoggerFactory;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicReference;
@@ -55,7 +53,7 @@ public final class PushRequest extends FutureTask<PushResult> {
     private final AtomicReference<Status> status = new AtomicReference<>(Status.init);
     private final TimeLine timeLine = new TimeLine("Push-Time-Line");
 
-    private final GatewayConnectionFactory connectionFactory;
+    private final MPushClient mPushClient;
 
     private AckModel ackModel;
     private Set<String> tags;
@@ -66,6 +64,7 @@ public final class PushRequest extends FutureTask<PushResult> {
     private int timeout;
     private ClientLocation location;
     private int sessionId;
+    private String taskId;
     private Future<?> future;
     private PushResult result;
 
@@ -84,7 +83,7 @@ public final class PushRequest extends FutureTask<PushResult> {
 
         timeLine.addTimePoint("check-gateway-conn");
         //2.通过网关连接，把消息发送到所在机器
-        boolean success = connectionFactory.send(
+        boolean success = mPushClient.getGatewayConnectionFactory().send(
                 location.getHostAndPort(),
                 connection -> GatewayPushMessage
                         .build(connection)
@@ -108,7 +107,7 @@ public final class PushRequest extends FutureTask<PushResult> {
                     });
                     PushRequest.this.content = null;//释放内存
                     sessionId = pushMessage.getSessionId();
-                    future = PushRequestBus.I.put(sessionId, PushRequest.this);
+                    future = mPushClient.getPushRequestBus().put(sessionId, PushRequest.this);
                 }
         );
 
@@ -133,7 +132,7 @@ public final class PushRequest extends FutureTask<PushResult> {
                 if (isTimeoutEnd) {//超时结束时，当前线程已经是线程池里的线程，直接调用callback
                     callback.onResult(getResult());
                 } else {//非超时结束时，当前线程为Netty线程池，要异步执行callback
-                    PushRequestBus.I.asyncCall(this);//会执行run方法
+                    mPushClient.getPushRequestBus().asyncCall(this);//会执行run方法
                 }
             }
         }
@@ -169,33 +168,35 @@ public final class PushRequest extends FutureTask<PushResult> {
     public FutureTask<PushResult> broadcast() {
         timeLine.begin();
 
-        boolean success = connectionFactory.broadcast(
-                connection -> GatewayPushMessage
-                        .build(connection)
-                        .setUserId(userId)
-                        .setContent(content)
-                        .setTags(tags)
-                        .setCondition(condition)
-                        .addFlag(ackModel.flag),
+        boolean success = mPushClient.getGatewayConnectionFactory()
+                .broadcast(
+                        connection -> GatewayPushMessage
+                                .build(connection)
+                                .setUserId(userId)
+                                .setContent(content)
+                                .setTags(tags)
+                                .setCondition(condition)
+                                .setTaskId(taskId)
+                                .addFlag(ackModel.flag),
 
-                pushMessage -> {
-                    pushMessage.sendRaw(f -> {
-                        if (f.isSuccess()) {
-                            LOGGER.debug("send broadcast to gateway server success, userId={}, conn={}", userId, f.channel());
-                        } else {
-                            failure();
-                            LOGGER.error("send broadcast to gateway server failure, userId={}, conn={}", userId, f.channel(), f.cause());
+                        pushMessage -> {
+                            pushMessage.sendRaw(f -> {
+                                if (f.isSuccess()) {
+                                    LOGGER.debug("send broadcast to gateway server success, userId={}, conn={}", userId, f.channel());
+                                } else {
+                                    failure();
+                                    LOGGER.error("send broadcast to gateway server failure, userId={}, conn={}", userId, f.channel(), f.cause());
+                                }
+                            });
+
+                            if (pushMessage.taskId == null) {
+                                sessionId = pushMessage.getSessionId();
+                                future = mPushClient.getPushRequestBus().put(sessionId, PushRequest.this);
+                            } else {
+                                success();
+                            }
                         }
-                    });
-
-                    if (pushMessage.taskId == null) {
-                        sessionId = pushMessage.getSessionId();
-                        future = PushRequestBus.I.put(sessionId, PushRequest.this);
-                    } else {
-                        success();
-                    }
-                }
-        );
+                );
 
         if (!success) {
             LOGGER.error("get gateway connection failure when broadcast.");
@@ -206,12 +207,13 @@ public final class PushRequest extends FutureTask<PushResult> {
     }
 
     private void offline() {
-        CachedRemoteRouterManager.I.invalidateLocalCache(userId);
+        mPushClient.getCachedRemoteRouterManager().invalidateLocalCache(userId);
         submit(Status.offline);
     }
 
     private void timeout() {
-        if (PushRequestBus.I.getAndRemove(sessionId) != null) {
+        //超时要把request从队列中移除，其他情况是XXHandler中移除的
+        if (mPushClient.getPushRequestBus().getAndRemove(sessionId) != null) {
             submit(Status.timeout);
         }
     }
@@ -231,10 +233,17 @@ public final class PushRequest extends FutureTask<PushResult> {
     public void onRedirect() {
         timeLine.addTimePoint("redirect");
         LOGGER.warn("user route has changed, userId={}, location={}", userId, location);
-        CachedRemoteRouterManager.I.invalidateLocalCache(userId);
-        if (status.get() == Status.init) {//表示任务还没有完成，还可以重新发送
-            RemoteRouter remoteRouter = CachedRemoteRouterManager.I.lookup(userId, location.getClientType());
-            send(remoteRouter);
+        //1. 清理一下缓存，确保查询的路由是正确的
+        mPushClient.getCachedRemoteRouterManager().invalidateLocalCache(userId);
+        if (status.get() == Status.init) {//init表示任务还没有完成，还可以重新发送
+            //2. 取消前一次任务, 否则会有两次回调
+            if (mPushClient.getPushRequestBus().getAndRemove(sessionId) != null) {
+                if (future != null && !future.isCancelled()) {
+                    future.cancel(true);
+                }
+            }
+            //3. 取最新的路由重发一次
+            send(mPushClient.getCachedRemoteRouterManager().lookup(userId, location.getClientType()));
         }
     }
 
@@ -252,12 +261,12 @@ public final class PushRequest extends FutureTask<PushResult> {
         return timeout;
     }
 
-    public PushRequest(GatewayConnectionFactory factory) {
+    public PushRequest(MPushClient mPushClient) {
         super(NONE);
-        this.connectionFactory = factory;
+        this.mPushClient = mPushClient;
     }
 
-    public static PushRequest build(GatewayConnectionFactory factory, PushContext ctx) {
+    public static PushRequest build(MPushClient mPushClient, PushContext ctx) {
         byte[] content = ctx.getContext();
         PushMsg msg = ctx.getPushMsg();
         if (msg != null) {
@@ -269,11 +278,12 @@ public final class PushRequest extends FutureTask<PushResult> {
 
         Objects.requireNonNull(content, "push content can not be null.");
 
-        return new PushRequest(factory)
+        return new PushRequest(mPushClient)
                 .setAckModel(ctx.getAckModel())
                 .setUserId(ctx.getUserId())
                 .setTags(ctx.getTags())
                 .setCondition(ctx.getCondition())
+                .setTaskId(ctx.getTaskId())
                 .setContent(content)
                 .setTimeout(ctx.getTimeout())
                 .setCallback(ctx.getCallback());
@@ -322,6 +332,11 @@ public final class PushRequest extends FutureTask<PushResult> {
 
     public PushRequest setCondition(String condition) {
         this.condition = condition;
+        return this;
+    }
+
+    public PushRequest setTaskId(String taskId) {
+        this.taskId = taskId;
         return this;
     }
 

@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,35 +14,22 @@
  * limitations under the License.
  *
  * Contributors:
- *     ohun@live.cn (夜色)
+ *   ohun@live.cn (夜色)
  */
 
-package com.mpush.api;
+package com.mpush.api.spi.core;
 
-import com.mpush.api.event.*;
+import com.mpush.api.connection.Cipher;
+import com.mpush.api.spi.Factory;
+import com.mpush.api.spi.SpiLoader;
 
 /**
- * Created by ohun on 16/10/19.
+ * Created by yxx on 2016/5/19.
  *
- * @author ohun@live.cn (夜色)
+ * @author ohun@live.cn
  */
-public interface ServerEventListener {
-
-    default void on(ServerStartupEvent event) {
-    }
-
-    default void on(ServerShutdownEvent server) {
-    }
-
-    default void on(RouterChangeEvent event) {
-    }
-
-    default void on(KickUserEvent event) {
-    }
-
-    default void on(UserOnlineEvent event) {
-    }
-
-    default void on(UserOfflineEvent event) {
+public interface RsaCipherFactory extends Factory<Cipher> {
+    static Cipher create() {
+        return SpiLoader.load(RsaCipherFactory.class).get();
     }
 }

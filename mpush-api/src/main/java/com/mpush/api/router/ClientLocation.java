@@ -134,7 +134,7 @@ public final class ClientLocation {
         return this;
     }
 
-    public boolean isThisPC(String host, int port) {
+    public boolean isThisMachine(String host, int port) {
         return this.port == port && this.host.equals(host);
     }
 
@@ -150,6 +150,18 @@ public final class ClientLocation {
         location.deviceId = context.deviceId;
         location.connId = connection.getId();
         return location;
+    }
+
+    public String toJson() {
+        return "{"
+                + "\"port\":" + port
+                + (host == null ? "" : ",\"host\":\"" + host + "\"")
+                + (deviceId == null ? "" : ",\"deviceId\":\"" + deviceId + "\"")
+                + (osName == null ? "" : ",\"osName\":\"" + osName + "\"")
+                + (clientVersion == null ? "" : ",\"clientVersion\":\"" + clientVersion + "\"")
+                + (connId == null ? "" : ",\"connId\":\"" + connId + "\"")
+                + "}";
+
     }
 
     @Override

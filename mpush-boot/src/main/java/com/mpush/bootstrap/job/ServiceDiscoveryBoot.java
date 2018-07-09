@@ -17,19 +17,31 @@
  *   ohun@live.cn (夜色)
  */
 
-package com.mpush.api.spi.core;
+package com.mpush.bootstrap.job;
 
-import com.mpush.api.connection.Cipher;
-import com.mpush.api.spi.Factory;
-import com.mpush.api.spi.SpiLoader;
+import com.mpush.api.spi.common.ServiceDiscoveryFactory;
+import com.mpush.api.spi.common.ServiceRegistryFactory;
+import com.mpush.api.srd.ServiceDiscovery;
+import com.mpush.tools.log.Logs;
 
 /**
- * Created by yxx on 2016/5/19.
+ * Created by yxx on 2016/5/14.
  *
  * @author ohun@live.cn
  */
-public interface CipherFactory extends Factory<Cipher> {
-    static Cipher create() {
-        return SpiLoader.load(CipherFactory.class).get();
+public final class ServiceDiscoveryBoot extends BootJob {
+
+    @Override
+    protected void start() {
+        Logs.Console.info("init service discovery waiting for connected...");
+        ServiceDiscoveryFactory.create().syncStart();
+        startNext();
+    }
+
+    @Override
+    protected void stop() {
+        stopNext();
+        ServiceDiscoveryFactory.create().syncStop();
+        Logs.Console.info("service discovery closed...");
     }
 }
